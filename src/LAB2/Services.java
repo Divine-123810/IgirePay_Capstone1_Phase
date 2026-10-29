@@ -6,7 +6,6 @@ public class Services {
 
     private final ProcessedRequestImpl processedRequest = new ProcessedRequestImpl();
 
-
     public boolean deposit(String accountId, double amount, String referenceId)
             throws SQLException {
 
@@ -189,28 +188,4 @@ public class Services {
         }
     }
 
-//    public static void main(String[] args) {
-//        Services wallet = new Services();
-//
-//        try {
-//            System.out.println("Deposit 50000:          " + wallet.deposit("1", 50000, "DEP-001"));
-//            System.out.println("Same deposit again:     " + wallet.deposit("1", 50000, "DEP-001"));
-//            System.out.println("Withdraw 20000:         " + wallet.withdraw("1", 20000, "WD-001"));
-//            System.out.println("Send 20000 from 1 to 2: " + wallet.transfer("1", "2", 20000, "TRF-001"));
-//        } catch (Exception e) {
-//            System.out.println("Error: " + e.getMessage());
-//        }
-//
-//        try {
-//            wallet.withdraw("1", 999999, "WD-002");
-//        } catch (Exception e) {
-//            System.out.println("Withdraw 999999:        " + e.getMessage());
-//        }
-//
-//        try {
-//            wallet.deposit("1", 4000000, "x' OR '1'='1");
-//        } catch (Exception e) {
-//            System.out.println("Bad reference id:       " + e.getMessage());
-//        }
-//    }
 }

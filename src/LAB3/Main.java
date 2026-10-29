@@ -40,7 +40,6 @@ public class Main {
 
     private static Customer loggedIn;
 
-
     public static void main(String[] args) {
 
         System.out.println("        IgirePay PayMents  -  Digital Wallet (Rwanda)      ");
