@@ -6,54 +6,108 @@ public class Services {
 
     private final ProcessedRequestImpl processedRequest = new ProcessedRequestImpl();
 
-    public boolean deposit(String accountId, double amount, String referenceId) throws SQLException {
+
+    public boolean deposit(String accountId, double amount, String referenceId)
+            throws SQLException {
+
         validate(amount, referenceId);
 
         try (Connection connection = DBConnection.getConnection()) {
             connection.setAutoCommit(false);
-            try {
-                if (!processedRequest.markProcessed(connection, referenceId)) {
-                    connection.rollback();
-                    return false;                         // duplicate reference id
-                }
-                double balance = getBalance(connection, accountId);
-                setBalance(connection, accountId, balance + amount);
-                saveTransaction(connection, accountId, referenceId, "DEPOSIT", amount);
 
-                connection.commit();
-                return true;
-            } catch (Exception e) {
-                connection.rollback();
-                throw e;
-            }
-        }
-    }
-
-    public boolean withdraw(String accountId, double amount, String referenceId) throws SQLException {
-        validate(amount, referenceId);
-
-        try (Connection connection = DBConnection.getConnection()) {
-            connection.setAutoCommit(false);
             try {
                 if (!processedRequest.markProcessed(connection, referenceId)) {
                     connection.rollback();
                     return false;
                 }
+
                 double balance = getBalance(connection, accountId);
-                if (balance < amount) {
-                    throw new IllegalStateException("Insufficient funds. Balance: " + balance);
+                String accountType;
+                String sql = "SELECT account_type FROM accounts WHERE account_id = ?";
+
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    statement.setString(1, accountId);
+
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (!resultSet.next()) {
+                            throw new IllegalArgumentException("Account not found.");
+                        }
+
+                        accountType = resultSet.getString("account_type");
+                    }
                 }
-                setBalance(connection, accountId, balance - amount);
-                saveTransaction(connection, accountId, referenceId, "WITHDRAWAL", amount);
+                if ("SAVING".equalsIgnoreCase(accountType) && amount <= 1000) {
+                    throw new IllegalArgumentException(
+                            "Deposit into a saving account must be greater than 1000 RWF.");
+                }
+
+                setBalance(connection, accountId, balance + amount);
+                saveTransaction(connection, accountId, referenceId, "DEPOSIT", amount);
 
                 connection.commit();
                 return true;
+
             } catch (Exception e) {
                 connection.rollback();
                 throw e;
             }
         }
     }
+
+
+    public boolean withdraw(String accountId, double amount, String referenceId)
+            throws SQLException {
+
+        validate(amount, referenceId);
+
+        try (Connection connection = DBConnection.getConnection()) {
+            connection.setAutoCommit(false);
+
+            try {
+                if (!processedRequest.markProcessed(connection, referenceId)) {
+                    connection.rollback();
+                    return false;
+                }
+
+                double balance = getBalance(connection, accountId);
+
+                String accountType;
+                String sql = "SELECT account_type FROM accounts WHERE account_id = ?";
+
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    statement.setString(1, accountId);
+
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (!resultSet.next()) {
+                            throw new IllegalArgumentException("Account not found.");
+                        }
+
+                        accountType = resultSet.getString("account_type");
+                    }
+                }
+                if (balance < amount) {
+                    throw new IllegalStateException(
+                            "Insufficient funds. Balance: " + balance);
+                }
+                if ("SAVING".equalsIgnoreCase(accountType)
+                        && balance - amount < 1000) {
+                    throw new IllegalStateException(
+                            "A saving account must maintain a minimum balance of 1000 RWF.");
+                }
+
+                setBalance(connection, accountId, balance - amount);
+                saveTransaction(connection, accountId, referenceId, "WITHDRAWAL", amount);
+
+                connection.commit();
+                return true;
+
+            } catch (Exception e) {
+                connection.rollback();
+                throw e;
+            }
+        }
+    }
+
 
     public boolean transfer(String fromAccountId, String toAccountId, double amount, String referenceId)
             throws SQLException {
@@ -135,28 +189,28 @@ public class Services {
         }
     }
 
-    public static void main(String[] args) {
-        Services wallet = new Services();
-
-        try {
-            System.out.println("Deposit 50000:          " + wallet.deposit("1", 50000, "DEP-001"));
-            System.out.println("Same deposit again:     " + wallet.deposit("1", 50000, "DEP-001"));
-            System.out.println("Withdraw 20000:         " + wallet.withdraw("1", 20000, "WD-001"));
-            System.out.println("Send 20000 from 1 to 2: " + wallet.transfer("1", "2", 20000, "TRF-001"));
-        } catch (Exception e) {
-            System.out.println("Error: " + e.getMessage());
-        }
-
-        try {
-            wallet.withdraw("1", 999999, "WD-002");
-        } catch (Exception e) {
-            System.out.println("Withdraw 999999:        " + e.getMessage());
-        }
-
-        try {
-            wallet.deposit("1", 4000000, "x' OR '1'='1");
-        } catch (Exception e) {
-            System.out.println("Bad reference id:       " + e.getMessage());
-        }
-    }
+//    public static void main(String[] args) {
+//        Services wallet = new Services();
+//
+//        try {
+//            System.out.println("Deposit 50000:          " + wallet.deposit("1", 50000, "DEP-001"));
+//            System.out.println("Same deposit again:     " + wallet.deposit("1", 50000, "DEP-001"));
+//            System.out.println("Withdraw 20000:         " + wallet.withdraw("1", 20000, "WD-001"));
+//            System.out.println("Send 20000 from 1 to 2: " + wallet.transfer("1", "2", 20000, "TRF-001"));
+//        } catch (Exception e) {
+//            System.out.println("Error: " + e.getMessage());
+//        }
+//
+//        try {
+//            wallet.withdraw("1", 999999, "WD-002");
+//        } catch (Exception e) {
+//            System.out.println("Withdraw 999999:        " + e.getMessage());
+//        }
+//
+//        try {
+//            wallet.deposit("1", 4000000, "x' OR '1'='1");
+//        } catch (Exception e) {
+//            System.out.println("Bad reference id:       " + e.getMessage());
+//        }
+//    }
 }
