@@ -1,36 +1,21 @@
+
 package LAB3;
 
-import LAB2.AccountDAO;
-import LAB2.AccountDAOImpl;
-import LAB2.CustomerDAO;
-import LAB2.CustomerDAOImp;
-import LAB2.DBConnection;
-import LAB2.Services;
-import LAB2.TransactionDAO;
-import LAB2.TransactionDAOImp;
 import LAB1.Account;
 import LAB1.Customer;
 import LAB1.Transaction;
+import LAB2.*;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
+import java.sql.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
-import java.util.Scanner;
-import java.util.UUID;
+import java.util.*;
 
 public class Main {
-
     private static final Scanner scanner = new Scanner(System.in);
     private static final Random random = new Random();
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
-
     private static final CustomerDAO customerDAO = new CustomerDAOImp();
     private static final AccountDAO accountDAO = new AccountDAOImpl();
     private static final TransactionDAO transactionDAO = new TransactionDAOImp();
@@ -41,154 +26,142 @@ public class Main {
     private static Customer loggedIn;
 
     public static void main(String[] args) {
+        System.out.println("       IgirePay Payments - Digital Wallet (Rwanda)");
 
-        System.out.println("        IgirePay PayMents  -  Digital Wallet (Rwanda)      ");
-
-        if (!prepareDatabase()) {
-            return;
-        }
+        if (!prepareDatabase()) return;
 
         while (true) {
-            System.out.println();
-            System.out.println("---------------- WELCOME ----------------");
-            System.out.println(" 1. Register as a new customer");
-            System.out.println(" 2. Login");
-            System.out.println(" 0. Exit");
-            String choice = ask("Choose");
+            menu("WELCOME", "1. Register as a new customer", "2. Login", "0. Exit");
 
-            try {
-                switch (choice) {
-                    case "1" -> register();
-                    case "2" -> login();
-                    case "0" -> {
-                        System.out.println("Thank you for using IgirePay!");
-                        return;
-                    }
-                    default -> System.out.println("[!] Invalid option.");
+            switch (ask("Choose")) {
+                case "1" -> runSafely(() -> register());
+                case "2" -> runSafely(() -> login());
+                case "0" -> {
+                    System.out.println("Thank you for using IgirePay!");
+                    return;
                 }
-            } catch (SQLException e) {
-                showDatabaseError(e);
-            } catch (IllegalArgumentException | IllegalStateException e) {
-                System.out.println("[!] " + e.getMessage());
+                default -> System.out.println("[!] Invalid option.");
             }
         }
     }
 
+    private static void menu(String title, String... options) {
+        System.out.println("\n------------- " + title + " -------------");
+        for (String option : options) System.out.println(option);
+    }
+
+    private static void runSafely(SqlAction action) {
+        try {
+            action.run();
+        } catch (SQLException e) {
+            showDatabaseError(e);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            System.out.println("[!] " + e.getMessage());
+        }
+    }
+
+    @FunctionalInterface
+    private interface SqlAction {
+        void run() throws SQLException;
+    }
+
     private static boolean prepareDatabase() {
-        try (Connection connection = DBConnection.getConnection();
-             Statement statement = connection.createStatement()) {
-            statement.executeUpdate("""
-                    CREATE TABLE IF NOT EXISTS processed_requests (
-                        id  SERIAL PRIMARY KEY,
-                        reference_id VARCHAR(100) NOT NULL UNIQUE,
-                        processed_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """);
-            statement.executeUpdate("CREATE SEQUENCE IF NOT EXISTS customer_id_seq START 1001");
+        try (Connection c = DBConnection.getConnection();
+             Statement s = c.createStatement()) {
+            s.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS processed_requests (
+                    id SERIAL PRIMARY KEY,
+                    reference_id VARCHAR(100) NOT NULL UNIQUE,
+                    processed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+            s.executeUpdate(
+                    "CREATE SEQUENCE IF NOT EXISTS customer_id_seq START 1001");
             pinDAO.createTableIfNotExists();
             return true;
         } catch (SQLException e) {
             System.out.println("[!] Cannot connect to the database.");
-            System.out.println(" Reason: " + e.getMessage());
-            System.out.println(" Check that PostgreSQL is running, that the database 'IgirePay' exists,");
-            System.out.println(" and that the user/password in LAB2/DBConnection.java are correct.");
+            System.out.println("Reason: " + e.getMessage());
+            System.out.println("Check PostgreSQL, the IgirePayDB database,");
+            System.out.println("and the credentials in LAB2/DBConnection.java.");
             return false;
         }
     }
 
-
     private static void register() throws SQLException {
-        System.out.println();
-        System.out.println("---------- NEW CUSTOMER ----------");
+        menu("NEW CUSTOMER");
         String name = askRequired("Full name");
         String email = askMatching("Email", "[^@\\s]+@[^@\\s]+\\.[^@\\s]+", "Enter a valid email, e.g. name@example.com");
+
         if (customerDAO.findByEmail(email) != null) {
-            System.out.println("[!] This email is already registered. Please log in instead.");
+            System.out.println("[!] Email already registered. Please log in.");
             return;
         }
+
         String phone = askMatching("Phone number (07XXXXXXXX)", "07\\d{8}", "Enter 10 digits starting with 07");
+        String id = newCustomerId();
 
-        String customerId = newCustomerId();
-        Customer customer = new Customer(customerId, name, email, phone);
-        customerDAO.registerCustomer(customer);
+        customerDAO.registerCustomer(new Customer(id, name, email, phone));
+        pinDAO.savePin(id, askNewPin());
 
-        System.out.println();
-        System.out.println("Now create a 4-digit PIN. You will use it to log in and to confirm payments.");
-        pinDAO.savePin(customerId, askNewPin());
-
-        System.out.println();
-        System.out.println("[OK] Registration complete!");
-        System.out.println("     Your customer ID is: " + customerId);
-        System.out.println("     To log in, use your email (" + email + ") and your PIN.");
+        System.out.println("[OK] Registration complete. Customer ID: " + id);
 
         if (askYesNo("Open a WALLET account now?")) {
             String accountId = newAccountId("WALLET");
-            accountDAO.registerAccount(accountId, customerId, "WALLET");
-            System.out.println("[OK] Wallet account " + accountId + " opened with balance 0.00 RWF.");
+            accountDAO.registerAccount(accountId, id, "WALLET");
+            System.out.println("[OK] Wallet account opened: " + accountId);
         }
     }
 
     private static void login() throws SQLException {
-        System.out.println();
-        System.out.println("---------- LOGIN ----------");
+        menu("LOGIN");
         Customer customer = customerDAO.findByEmail(ask("Email"));
+
         if (customer == null) {
-            System.out.println("[!] No customer with that email. Register first (option 1).");
+            System.out.println("[!] Customer not found. Register first.");
             return;
         }
 
-        if (!pinDAO.hasPin(customer.getCustomerId())) {
-            System.out.println("This customer has no PIN yet. Confirm your phone number to create one.");
+        String id = customer.getCustomerId();
+
+        if (!pinDAO.hasPin(id)) {
+            System.out.println("Create a PIN after verifying your phone number.");
             if (!ask("Phone number on file").equals(customer.getPhoneNumber())) {
                 System.out.println("[!] Phone number does not match.");
                 return;
             }
-            pinDAO.savePin(customer.getCustomerId(), askNewPin());
-            System.out.println("[OK] PIN created.");
+            pinDAO.savePin(id, askNewPin());
         }
 
-        for (int attemptsLeft = 3; attemptsLeft > 0; attemptsLeft--) {
-            if (pinDAO.verifyPin(customer.getCustomerId(), ask("PIN"))) {
+        for (int i = 3; i > 0; i--) {
+            if (pinDAO.verifyPin(id, ask("PIN"))) {
                 loggedIn = customer;
                 dashboard();
                 return;
             }
-            System.out.println("[!] Wrong PIN. Attempts left: " + (attemptsLeft - 1));
+            System.out.println("[!] Wrong PIN. Attempts left: " + (i - 1));
         }
-        System.out.println("[!] Too many wrong attempts. Back to the welcome screen.");
+        System.out.println("[!] Too many wrong attempts.");
     }
 
-
     private static void dashboard() {
-        System.out.println();
-        System.out.println("[OK] Welcome, " + loggedIn.getCustomerName() + "!");
-
-        while (true) {
-            System.out.println();
-            System.out.println("=========== " + loggedIn.getCustomerName() + " (" + loggedIn.getCustomerId() + ") ===========");
-            System.out.println("-- My accounts --");
-            System.out.println(" 1. Open a new account");
-            System.out.println(" 2. View my accounts");
-            System.out.println(" 3. View account details / balance");
-            System.out.println(" 4. Change account type");
-            System.out.println(" 5. Delete an inactive account");
-            System.out.println("-- Money --");
-            System.out.println(" 6. Deposit");
-            System.out.println(" 7. Withdraw");
-            System.out.println(" 8. Transfer to another account");
-            System.out.println(" 9. Transaction history");
-            System.out.println("13. Export transaction history to CSV");
-            System.out.println("14. View daily transaction summary");
-            System.out.println("15. View customer transaction statement");
-            System.out.println("-- Profile & security --");
-            System.out.println("10. View my profile");
-            System.out.println("11. Update my details");
-            System.out.println("12. Change PIN");
-            System.out.println(" 0. Logout");
-            String choice = ask("Choose");
+        while (loggedIn != null) {
+            menu(loggedIn.getCustomerName() + " (" + loggedIn.getCustomerId() + ")",
+                    "-- My accounts --",
+                    "1. Open account", "2. View my accounts",
+                    "3. Account details / balance", "4. Change account type",
+                    "5. Delete inactive account",
+                     "6. Deposit", "7. Withdraw",
+                    "8. Transfer", "9. Transaction history",
+                    "10. View profile",
+                    "11. Update details", "12. Change PIN",
+                    "13. Export history to CSV",
+                    "14. Daily summary",
+                    "15. Customer statement",
+                    "0. Logout");
 
             try {
-                switch (choice) {
+                switch (ask("Choose")) {
                     case "1" -> openAccount();
                     case "2" -> viewMyAccounts();
                     case "3" -> viewAccountDetails();
@@ -198,16 +171,15 @@ public class Main {
                     case "7" -> withdraw();
                     case "8" -> transfer();
                     case "9" -> history();
-                    case "13" -> exportTransactionHistory();
-                    case "14" -> dailyTransactionSummary();
-                    case "15" -> customerTransactionStatement();
                     case "10" -> viewProfile();
                     case "11" -> updateProfile();
                     case "12" -> changePin();
+                    case "13" -> exportTransactionHistory();
+                    case "14" -> dailyTransactionSummary();
+                    case "15" -> customerTransactionStatement();
                     case "0" -> {
-                        System.out.println("[OK] Logged out. Goodbye, " + loggedIn.getCustomerName() + ".");
+                        System.out.println("Logged out. Goodbye, " + loggedIn.getCustomerName() + ".");
                         loggedIn = null;
-                        return;
                     }
                     default -> System.out.println("[!] Invalid option.");
                 }
@@ -220,116 +192,100 @@ public class Main {
     }
 
     private static void openAccount() throws SQLException {
-        System.out.println(" 1. Wallet account");
-        System.out.println(" 2. Savings account");
-        String choice = ask("Account type");
-        String type;
-        if (choice.equals("1")) {
-            type = "WALLET";
-        } else if (choice.equals("2")) {
-            type = "SAVING";
-        } else {
+        String choice = ask("1. Wallet  2. Savings");
+        String type = choice.equals("1") ? "WALLET" : choice.equals("2") ? "SAVING" : null;
+
+        if (type == null) {
             System.out.println("[!] Invalid account type.");
             return;
         }
-        String accountId = newAccountId(type);
-        accountDAO.registerAccount(accountId, loggedIn.getCustomerId(), type);
-        System.out.println("[OK] " + type + " account " + accountId + " opened with balance 0.00 RWF.");
+
+        String id = newAccountId(type);
+        accountDAO.registerAccount(id, loggedIn.getCustomerId(), type);
+        System.out.println("[OK] " + type + " account opened: " + id);
     }
 
-    /** READ (all my accounts) */
     private static void viewMyAccounts() throws SQLException {
         List<Account> accounts = accountDAO.findByCustomer(loggedIn.getCustomerId());
+
         if (accounts.isEmpty()) {
-            System.out.println("You have no accounts yet. Choose option 1 to open one.");
+            System.out.println("You have no accounts. Choose option 1 to open one.");
             return;
         }
-        System.out.println();
-        System.out.printf("%-10s %-9s %20s   %s%n", "ACCOUNT", "TYPE", "BALANCE", "OPENED");
+
+        System.out.printf("%-10s %-10s %18s   %s%n", "ACCOUNT", "TYPE", "BALANCE", "OPENED");
         double total = 0;
+
         for (Account a : accounts) {
-            System.out.printf("%-10s %-9s %20s   %s%n", a.getAccountId(), a.getAccountType(),
-                    money(a.getBalance()), a.getCreatedAt().format(DATE));
+            System.out.printf("%-10s %-10s %18s   %s%n", a.getAccountId(), a.getAccountType(), money(a.getBalance()), a.getCreatedAt().format(DATE));
             total += a.getBalance();
         }
-        System.out.printf("%-20s %20s%n", "TOTAL", money(total));
+        System.out.println("TOTAL: " + money(total));
     }
 
-
     private static void viewAccountDetails() throws SQLException {
-        Account account = chooseMyAccount("Account ID");
-        if (account == null) return;
+        Account a = chooseMyAccount("Account ID");
+        if (a == null) return;
 
-        int count = transactionDAO.findByAccount(account.getAccountId()).size();
-        System.out.println();
-        System.out.println("Account     : " + account.getAccountId());
-        System.out.println("Type        : " + account.getAccountType());
-        System.out.println("Balance     : " + money(account.getBalance()));
-        System.out.println("Opened      : " + account.getCreatedAt().format(DATE));
-        System.out.println("Transactions: " + count);
+        System.out.println("Account      : " + a.getAccountId());
+        System.out.println("Type         : " + a.getAccountType());
+        System.out.println("Balance      : " + money(a.getBalance()));
+        System.out.println("Opened       : " + a.getCreatedAt().format(DATE));
+        System.out.println("Transactions : " + transactionDAO.findByAccount(a.getAccountId()).size());
     }
 
     private static void changeAccountType() throws SQLException {
-        Account account = chooseMyAccount("Account ID");
-        if (account == null) return;
+        Account a = chooseMyAccount("Account ID");
+        if (a == null) return;
 
-        String newType = account.getAccountType().equals("WALLET") ? "SAVINGS" : "WALLET";
-        if (!askYesNo("Change account " + account.getAccountId() + " from "
-                + account.getAccountType() + " to " + newType + "?")) {
-            System.out.println("Cancelled.");
+        String type = a.getAccountType().equals("WALLET") ? "SAVING" : "WALLET";
+        if (!askYesNo("Change " + a.getAccountId() + " to " + type + "?"))
             return;
-        }
-        account.setAccountType(newType);
-        accountDAO.updateAccount(account);
-        System.out.println("[OK] Account " + account.getAccountId() + " is now a " + newType + " account.");
+
+        a.setAccountType(type);
+        accountDAO.updateAccount(a);
+        System.out.println("[OK] Account type updated.");
     }
 
     private static void deleteInactiveAccount() throws SQLException {
-        Account account = chooseMyAccount("Account ID to delete");
-        if (account == null) return;
+        Account a = chooseMyAccount("Account ID to delete");
+        if (a == null) return;
 
-        if (account.getBalance() != 0) {
-            System.out.println("[!] Account still holds " + money(account.getBalance())
-                    + ". Withdraw or transfer the money first.");
+        if (a.getBalance() != 0 || !transactionDAO.findByAccount(a.getAccountId()).isEmpty()) {
+            System.out.println("[!] Account has a balance or transaction history.");
             return;
         }
-        if (!transactionDAO.findByAccount(account.getAccountId()).isEmpty()) {
-            System.out.println("[!] This account has transaction history, so it is kept for your records.");
-            return;
+
+        if (askYesNo("Permanently delete " + a.getAccountId() + "?")) {
+            accountDAO.deleteAccount(a.getAccountId());
+            System.out.println("[OK] Account deleted.");
         }
-        if (!askYesNo("Delete account " + account.getAccountId() + " permanently?")) {
-            System.out.println("Cancelled.");
-            return;
-        }
-        accountDAO.deleteAccount(account.getAccountId());
-        System.out.println("[OK] Account " + account.getAccountId() + " deleted.");
     }
 
-
     private static void deposit() throws SQLException {
-        Account account = chooseMyAccount("Deposit to account");
-        if (account == null) return;
-        double amount = askAmount();
-        String reference = askReference("DEP");
-
-        boolean processed = wallet.deposit(account.getAccountId(), amount, reference);
-        showResult(processed, reference, account.getAccountId());
+        processMoney("Deposit to account", "DEP", "DEPOSIT");
     }
 
     private static void withdraw() throws SQLException {
-        Account account = chooseMyAccount("Withdraw from account");
-        if (account == null) return;
-        double amount = askAmount();
-        if (!confirmWithPin()) return;
-        String reference = askReference("WD");
+        processMoney("Withdraw from account", "WD", "WITHDRAWAL");
+    }
 
-        boolean processed = wallet.withdraw(account.getAccountId(), amount, reference);
-        showResult(processed, reference, account.getAccountId());
+    private static void processMoney(String prompt, String prefix, String type) throws SQLException {
+        Account a = chooseMyAccount(prompt);
+        if (a == null) return;
+
+        double amount = askAmount();
+        if (type.equals("WITHDRAWAL") && !confirmWithPin()) return;
+
+        String ref = askReference(prefix);
+        boolean success = type.equals("DEPOSIT") ? wallet.deposit(a.getAccountId(), amount, ref) : wallet.withdraw(a.getAccountId(), amount, ref);
+        showResult(success, ref, a.getAccountId());
     }
 
     private static void transfer() throws SQLException {
         Account from = chooseMyAccount("From my account");
-        if (from == null) return;
+        if (from == null)
+            return;
 
         Account to = accountDAO.findById(ask("To account ID"));
         if (to == null) {
@@ -340,105 +296,79 @@ public class Main {
             System.out.println("[!] Cannot transfer to the same account.");
             return;
         }
+
         Customer receiver = customerDAO.findById(to.getCustomerId());
+        String name = receiver == null ? "unknown" : receiver.getCustomerName();
         double amount = askAmount();
 
-        String receiverName = (receiver != null) ? receiver.getCustomerName() : "unknown";
-        if (!askYesNo("Send " + money(amount) + " to " + receiverName + " (" + to.getAccountId() + ")?")) {
-            System.out.println("Cancelled.");
-            return;
-        }
-        if (!confirmWithPin()) return;
-        String reference = askReference("TRF");
+        if (!askYesNo("Send " + money(amount) + " to " + name + " (" + to.getAccountId() + ")?") || !confirmWithPin()) return;
 
-        boolean processed = wallet.transfer(from.getAccountId(), to.getAccountId(), amount, reference);
-        showResult(processed, reference, from.getAccountId());
+        String ref = askReference("TRF");
+        showResult(wallet.transfer(from.getAccountId(), to.getAccountId(), amount, ref), ref, from.getAccountId());
     }
 
     private static void history() throws SQLException {
-        Account account = chooseMyAccount("Account ID");
-        if (account == null) return;
+        Account a = chooseMyAccount("Account ID");
+        if (a == null)
+            return;
 
-        List<Transaction> list = transactionDAO.findByAccount(account.getAccountId());
-        System.out.println();
-        System.out.println("History of " + account.getAccountId() + " (" + account.getAccountType()
-                + ") - current balance " + money(account.getBalance()));
-        if (list.isEmpty()) {
-            System.out.println("   No transactions yet.");
+        List<Transaction> transactions = transactionDAO.findByAccount(a.getAccountId());
+
+        System.out.println("History of " + a.getAccountId() + " - balance " + money(a.getBalance()));
+
+        if (transactions.isEmpty()) {
+            System.out.println("No transactions yet.");
             return;
         }
-        System.out.printf("%-17s %-11s %20s   %s%n", "DATE", "TYPE", "AMOUNT", "REFERENCE");
-        for (Transaction t : list) {
+
+        System.out.printf("%-17s %-12s %18s   %s%n", "DATE", "TYPE", "AMOUNT", "REFERENCE");
+
+        for (Transaction t : transactions) {
             String sign = t.getTransactionType().equals("DEPOSIT") ? "+" : "-";
-            System.out.printf("%-17s %-11s %20s   %s%n", t.getTimestamp().format(DATE),
-                    t.getTransactionType(), sign + money(t.getAmount()), t.getReferenceId());
+            System.out.printf("%-17s %-12s %18s   %s%n", t.getTimestamp().format(DATE), t.getTransactionType(), sign + money(t.getAmount()), t.getReferenceId());
         }
     }
 
     private static void exportTransactionHistory() throws SQLException {
-        Account account = chooseMyAccount("Account ID to export");
+        Account a = chooseMyAccount("Account ID to export");
+        if (a == null) return;
 
-        if (account == null) {
-            return;
-        }
-
-        List<Transaction> transactions = transactionDAO.findByAccount(account.getAccountId());
-
-        if (transactions.isEmpty()) {
-            System.out.println("[!] This account has no transactions to export.");
+        List<Transaction> list = transactionDAO.findByAccount(a.getAccountId());
+        if (list.isEmpty()) {
+            System.out.println("[!] No transactions to export.");
             return;
         }
 
         try {
-            java.nio.file.Path file = reportService.exportToCSV(transactions, account.getAccountId());
-
-            System.out.println("[OK] Transaction history exported successfully.");
-            System.out.println("File location: " + file.toAbsolutePath());
-
+            System.out.println("[OK] CSV saved to: " + reportService.exportToCSV(list, a.getAccountId()).toAbsolutePath());
         } catch (java.io.IOException e) {
-            System.out.println("[!] Could not create the CSV file.");
-            System.out.println("Reason: " + e.getMessage());
+            System.out.println("[!] Could not create CSV: " + e.getMessage());
         }
     }
 
     private static void dailyTransactionSummary() throws SQLException {
-        System.out.println();
-        System.out.println("Enter date in YYYY-MM-DD format.");
-
-        String input = ask("Date");
         LocalDate date;
-
         try {
-            date = LocalDate.parse(input);
+            date = LocalDate.parse(ask("Date (YYYY-MM-DD)"));
         } catch (DateTimeParseException e) {
             System.out.println("[!] Invalid date. Example: 2026-10-28");
             return;
         }
 
-        List<Transaction> customerTransactions = transactionDAO.findByCustomer(loggedIn.getCustomerId());
-
-        List<Transaction> dailyTransactions = new ArrayList<>();
-
-        for (Transaction transaction : customerTransactions) {
-            if (transaction.getTimestamp() != null && transaction.getTimestamp().toLocalDate().equals(date)) {
-                dailyTransactions.add(transaction);
+        List<Transaction> daily = new ArrayList<>();
+        for (Transaction t : transactionDAO.findByCustomer(loggedIn.getCustomerId())) {
+            if (t.getTimestamp() != null && t.getTimestamp().toLocalDate().equals(date)) {
+                daily.add(t);
             }
         }
-
-        reportService.printDailySummary(dailyTransactions, date);
+        reportService.printDailySummary(daily, date);
     }
 
-
     private static void customerTransactionStatement() throws SQLException {
-        String customerId = loggedIn.getCustomerId();
-
-        List<Transaction> transactions = transactionDAO.findByCustomer(customerId);
-
-        reportService.printCustomerStatement(transactions, customerId);
+        reportService.printCustomerStatement(transactionDAO.findByCustomer(loggedIn.getCustomerId()), loggedIn.getCustomerId());
     }
 
     private static void viewProfile() {
-        System.out.println();
         System.out.println("Customer ID : " + loggedIn.getCustomerId());
         System.out.println("Name        : " + loggedIn.getCustomerName());
         System.out.println("Email       : " + loggedIn.getEmail());
@@ -447,26 +377,27 @@ public class Main {
 
     private static void updateProfile() throws SQLException {
         System.out.println("Press Enter to keep the current value.");
-        String name = ask("Full name [" + loggedIn.getCustomerName() + "]");
+        String name = ask("Name [" + loggedIn.getCustomerName() + "]");
         String email = ask("Email [" + loggedIn.getEmail() + "]");
         String phone = ask("Phone [" + loggedIn.getPhoneNumber() + "]");
 
         if (!email.isEmpty() && !email.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")) {
-            System.out.println("[!] Invalid email. Nothing was changed.");
+            System.out.println("[!] Invalid email. Nothing changed.");
             return;
         }
         if (!phone.isEmpty() && !phone.matches("07\\d{8}")) {
-            System.out.println("[!] Phone must be 10 digits starting with 07. Nothing was changed.");
+            System.out.println("[!] Phone must start with 07 and contain 10 digits.");
             return;
         }
         if (!email.isEmpty()) {
             Customer owner = customerDAO.findByEmail(email);
             if (owner != null && !owner.getCustomerId().equals(loggedIn.getCustomerId())) {
-                System.out.println("[!] That email is used by another customer. Nothing was changed.");
+                System.out.println("[!] Email already used. Nothing changed.");
                 return;
             }
         }
-        if (!name.isEmpty())  loggedIn.setCustomerName(name);
+
+        if (!name.isEmpty()) loggedIn.setCustomerName(name);
         if (!email.isEmpty()) loggedIn.setEmail(email);
         if (!phone.isEmpty()) loggedIn.setPhoneNumber(phone);
 
@@ -476,71 +407,67 @@ public class Main {
 
     private static void changePin() throws SQLException {
         if (!pinDAO.verifyPin(loggedIn.getCustomerId(), ask("Current PIN"))) {
-            System.out.println("[!] Wrong PIN. PIN not changed.");
+            System.out.println("[!] Wrong PIN.");
             return;
         }
-        String newPin = askNewPin();
-        pinDAO.savePin(loggedIn.getCustomerId(), newPin);
-        System.out.println("[OK] PIN changed successfully.");
+        pinDAO.savePin(loggedIn.getCustomerId(), askNewPin());
+        System.out.println("[OK] PIN changed.");
     }
 
-    private static Account chooseMyAccount(String label) throws SQLException {
-        List<Account> mine = accountDAO.findByCustomer(loggedIn.getCustomerId());
-        if (mine.isEmpty()) {
-            System.out.println("[!] You have no accounts yet. Choose option 1 to open one.");
+    private static Account chooseMyAccount(String prompt) throws SQLException {
+        List<Account> accounts = accountDAO.findByCustomer(loggedIn.getCustomerId());
+
+        if (accounts.isEmpty()) {
+            System.out.println("[!] You have no accounts. Open one first.");
             return null;
         }
-        System.out.print("Your accounts:");
-        for (Account a : mine) {
-            System.out.print("  " + a.getAccountId() + " (" + a.getAccountType() + ", " + money(a.getBalance()) + ")");
-        }
-        System.out.println();
 
-        String id = ask(label);
-        for (Account a : mine) {
-            if (a.getAccountId().equals(id)) {
-                return a;
-            }
+        for (Account a : accounts) {
+            System.out.println(a.getAccountId() + " (" + a.getAccountType() + ", " + money(a.getBalance()) + ")");
         }
-        System.out.println("[!] Account " + id + " is not one of your accounts.");
+
+        String id = ask(prompt);
+        for (Account a : accounts) {
+            if (a.getAccountId().equals(id))
+                return a;
+        }
+
+        System.out.println("[!] That account does not belong to you.");
         return null;
     }
+
     private static boolean confirmWithPin() throws SQLException {
-        for (int attemptsLeft = 3; attemptsLeft > 0; attemptsLeft--) {
-            if (pinDAO.verifyPin(loggedIn.getCustomerId(), ask("Enter your PIN to confirm"))) {
+        for (int i = 3; i > 0; i--) {
+            if (pinDAO.verifyPin(loggedIn.getCustomerId(), ask("Enter your PIN to confirm")))
                 return true;
-            }
-            System.out.println("[!] Wrong PIN. Attempts left: " + (attemptsLeft - 1));
+            System.out.println("[!] Wrong PIN. Attempts left: " + (i - 1));
         }
         System.out.println("[!] Operation cancelled.");
         return false;
     }
 
-    private static void showResult(boolean processed, String reference, String accountId) throws SQLException {
-        if (processed) {
-            Account updated = accountDAO.findById(accountId);
-            System.out.println("[OK] Done. Reference: " + reference
-                    + " | New balance of " + accountId + ": " + money(updated.getBalance()));
-        } else {
-            System.out.println("[!] Duplicate request: reference " + reference
-                    + " was already processed. Nothing was charged again.");
+    private static void showResult(boolean success, String ref, String id) throws SQLException {
+        if (!success) {
+            System.out.println("[!] Reference already processed: " + ref);
+            return;
         }
+
+        Account updated = accountDAO.findById(id);
+        System.out.println("[OK] Reference: " + ref + " | New balance: " + (updated == null ? "Unavailable" : money(updated.getBalance())));
     }
 
     private static void showDatabaseError(SQLException e) {
-        String state = e.getSQLState();
-        if (state != null && state.startsWith("08")) {          // 08xxx = connection problems
-            System.out.println("[!] Lost connection to the database. Check that PostgreSQL is running and try again.");
+        if (e.getSQLState() != null && e.getSQLState().startsWith("08")) {
+            System.out.println("[!] Database connection problem. Check PostgreSQL.");
         } else {
             System.out.println("[!] Database error: " + e.getMessage());
         }
     }
 
-
     private static String newCustomerId() throws SQLException {
-        try (Connection connection = DBConnection.getConnection();
-             Statement statement = connection.createStatement();
-             ResultSet rs = statement.executeQuery("SELECT nextval('customer_id_seq')")) {
+        try (Connection c = DBConnection.getConnection();
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("SELECT nextval('customer_id_seq')")) {
             rs.next();
             return "C" + rs.getLong(1);
         }
@@ -550,23 +477,23 @@ public class Main {
         String prefix = type.equals("WALLET") ? "W" : "S";
         String id;
         do {
-            id = prefix + (10000 + random.nextInt(90000));            // e.g. W48213
+            id = prefix + (10000 + random.nextInt(90000));
         } while (accountDAO.findById(id) != null);
         return id;
     }
 
     private static String ask(String label) {
         System.out.print(label + ": ");
-        if (!scanner.hasNextLine()) {                                // input closed
+        if (!scanner.hasNextLine())
             System.exit(0);
-        }
         return scanner.nextLine().trim();
     }
 
     private static String askRequired(String label) {
         while (true) {
             String value = ask(label);
-            if (!value.isEmpty()) return value;
+            if (!value.isEmpty())
+                return value;
             System.out.println("[!] This field is required.");
         }
     }
@@ -592,7 +519,8 @@ public class Main {
         while (true) {
             try {
                 double amount = Double.parseDouble(ask("Amount (RWF)"));
-                if (amount > 0) return amount;
+                if (amount > 0)
+                    return amount;
                 System.out.println("[!] Amount must be greater than zero.");
             } catch (NumberFormatException e) {
                 System.out.println("[!] Enter a number, e.g. 5000");
@@ -604,11 +532,11 @@ public class Main {
         while (true) {
             String pin = ask("New 4-digit PIN");
             if (!pin.matches("\\d{4}")) {
-                System.out.println("[!] The PIN must be exactly 4 digits.");
+                System.out.println("[!] PIN must be exactly four digits.");
                 continue;
             }
             if (!pin.equals(ask("Confirm PIN"))) {
-                System.out.println("[!] PINs do not match. Try again.");
+                System.out.println("[!] PINs do not match.");
                 continue;
             }
             return pin;
@@ -616,12 +544,12 @@ public class Main {
     }
 
     private static String askReference(String prefix) {
-        String reference = ask("Reference ID (press Enter to auto-generate)");
-        if (reference.isEmpty()) {
-            reference = prefix + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-            System.out.println("    Reference: " + reference);
+        String ref = ask("Reference ID (press Enter to generate)");
+        if (ref.isEmpty()) {
+            ref = prefix + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+            System.out.println("Reference: " + ref);
         }
-        return reference;
+        return ref;
     }
 
     private static String money(double amount) {
